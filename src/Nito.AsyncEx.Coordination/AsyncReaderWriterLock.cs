@@ -15,6 +15,9 @@ namespace Nito.AsyncEx
     [DebuggerTypeProxy(typeof(DebugView))]
     public sealed class AsyncReaderWriterLock
     {
+        private static AsyncLocal<double> _asyncLocalWriteReference = new AsyncLocal<double>();
+        private double? writeReference;
+
         /// <summary>
         /// The queue of TCSs that other tasks are awaiting to acquire the lock as writers.
         /// </summary>
@@ -29,6 +32,7 @@ namespace Nito.AsyncEx
         /// The object used for mutual exclusion.
         /// </summary>
         private readonly object _mutex;
+        private readonly LockRecursionPolicy lockRecursionPolicy;
 
         /// <summary>
         /// The semi-unique identifier for this instance. This is 0 if the id has not yet been created.
@@ -39,6 +43,7 @@ namespace Nito.AsyncEx
         /// Number of reader locks held; -1 if a writer lock is held; 0 if no locks are held.
         /// </summary>
         private int _locksHeld;
+        private Random rnd = new Random();
 
         [DebuggerNonUserCode]
         internal State GetStateForDebugger
@@ -78,9 +83,10 @@ namespace Nito.AsyncEx
         /// <summary>
         /// Creates a new async-compatible reader/writer lock.
         /// </summary>
-        public AsyncReaderWriterLock()
+        public AsyncReaderWriterLock(LockRecursionPolicy lockRecursionPolicy = LockRecursionPolicy.NoRecursion)
             : this(null, null)
         {
+            this.lockRecursionPolicy = lockRecursionPolicy;
         }
 
         /// <summary>
@@ -181,6 +187,20 @@ namespace Nito.AsyncEx
 #pragma warning disable CA2000 // Dispose objects before losing scope
                     ret = Task.FromResult<IDisposable>(new WriterKey(this));
 #pragma warning restore CA2000 // Dispose objects before losing scope
+                    if(this.lockRecursionPolicy == LockRecursionPolicy.SupportsRecursion){
+                        var writeReference = this.rnd.NextDouble();
+                        this.writeReference = writeReference;
+                        AsyncReaderWriterLock._asyncLocalWriteReference.Value = writeReference;
+                    }  
+                }
+                else if(_locksHeld < 0
+                && this.lockRecursionPolicy == LockRecursionPolicy.SupportsRecursion
+                && writeReference != null
+                && AsyncReaderWriterLock._asyncLocalWriteReference.Value == this.writeReference) {
+                    _locksHeld--;
+#pragma warning disable CA2000 // Dispose objects before losing scope
+                    ret = Task.FromResult<IDisposable>(new WriterKey(this));
+#pragma warning restore CA2000 // Dispose objects before losing scope
                 }
                 else
                 {
@@ -236,7 +256,7 @@ namespace Nito.AsyncEx
         /// </summary>
         private void ReleaseWaiters()
         {
-            if (_locksHeld == -1)
+            if (_locksHeld < 0)
                 return;
 
             // Give priority to writers, then readers.
@@ -248,6 +268,11 @@ namespace Nito.AsyncEx
 #pragma warning disable CA2000 // Dispose objects before losing scope
                     _writerQueue.Dequeue(new WriterKey(this));
 #pragma warning restore CA2000 // Dispose objects before losing scope
+                    if(this.lockRecursionPolicy == LockRecursionPolicy.SupportsRecursion){
+                        var writeReference = this.rnd.NextDouble();
+                        this.writeReference = writeReference;
+                        AsyncReaderWriterLock._asyncLocalWriteReference.Value = writeReference;
+                    }  
                     return;
                 }
             }
@@ -282,7 +307,7 @@ namespace Nito.AsyncEx
         {
             lock (_mutex)
             {
-                _locksHeld = 0;
+                ++_locksHeld;
                 ReleaseWaiters();
             }
         }

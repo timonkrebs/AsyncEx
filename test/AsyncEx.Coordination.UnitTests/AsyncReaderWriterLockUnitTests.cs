@@ -36,6 +36,24 @@ namespace UnitTests
         }
 
         [Fact]
+        public async Task WriteLocked_SupportsRecursion_AlowsAnotherWriterLockRecursive()
+        {
+            var rwl = new AsyncReaderWriterLock(LockRecursionPolicy.SupportsRecursion);
+            await rwl.WriterLockAsync();
+            var task = rwl.WriterLockAsync().AsTask();
+            await task;
+        }
+
+        [Fact]
+        public async Task WriteLocked_SupportsRecursion_PreventsAnotherWriterLock()
+        {
+            var rwl = new AsyncReaderWriterLock(LockRecursionPolicy.SupportsRecursion);
+            await rwl.WriterLockAsync();
+            var task = Task.Run(async () => await rwl.WriterLockAsync());
+            await AsyncAssert.NeverCompletesAsync(task);
+        }
+
+        [Fact]
         public async Task WriteLocked_PreventsReaderLock()
         {
             var rwl = new AsyncReaderWriterLock();
